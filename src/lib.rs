@@ -7,6 +7,7 @@
     unused_import_braces
 )]
 #![deny(missing_docs, unaligned_references)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! # num-ord
 //!
@@ -95,13 +96,15 @@ macro_rules! int_uint_impl_body {
 }
 
 macro_rules! apply_impl_body {
-    ($impl_body:ident, $Lhs:ty, $Rhs:ty, $CommonT:ty) => {
+    ($(#$attr:tt)* $impl_body:ident, $Lhs:ty, $Rhs:ty, $CommonT:ty) => {
+        $(#$attr)*
         impl PartialEq<NumOrd<$Rhs>> for NumOrd<$Lhs> {
             fn eq(&self, other: &NumOrd<$Rhs>) -> bool {
                 $impl_body!($Lhs, $Rhs, $CommonT, self.0, other.0, eq, false, false, false)
             }
         }
 
+        $(#$attr)*
         impl PartialOrd<NumOrd<$Rhs>> for NumOrd<$Lhs> {
             fn partial_cmp(&self, other: &NumOrd<$Rhs>) -> Option<Ordering> {
                 $impl_body!(
@@ -135,12 +138,14 @@ macro_rules! apply_impl_body {
         }
 
         // Reverse implementation.
+        $(#$attr)*
         impl PartialEq<NumOrd<$Lhs>> for NumOrd<$Rhs> {
             fn eq(&self, other: &NumOrd<$Lhs>) -> bool {
                 other == self
             }
         }
 
+        $(#$attr)*
         impl PartialOrd<NumOrd<$Lhs>> for NumOrd<$Rhs> {
             fn partial_cmp(&self, other: &NumOrd<$Lhs>) -> Option<Ordering> {
                 other.partial_cmp(self).map(|o| o.reverse())
@@ -165,6 +170,19 @@ macro_rules! apply_impl_body {
     };
 }
 
+macro_rules! apply_size_gated_impl_body {
+    ($($t:tt)*) => {
+        apply_impl_body!(
+            #[cfg_attr(docsrs, doc(cfg(any(
+                target_pointer_width = "16",
+                target_pointer_width = "32",
+                target_pointer_width = "64",
+            ))))]
+            $($t)*
+        );
+    };
+}
+
 apply_impl_body!(int_float_impl_body, i64, f32, ());
 apply_impl_body!(int_float_impl_body, i128, f32, ());
 apply_impl_body!(int_float_impl_body, i64, f64, ());
@@ -173,16 +191,68 @@ apply_impl_body!(int_float_impl_body, u64, f32, ());
 apply_impl_body!(int_float_impl_body, u128, f32, ());
 apply_impl_body!(int_float_impl_body, u64, f64, ());
 apply_impl_body!(int_float_impl_body, u128, f64, ());
+apply_size_gated_impl_body!(
+    #[cfg(target_pointer_width = "64")]
+    int_float_impl_body, isize, f32, ()
+);
+apply_size_gated_impl_body!(
+    #[cfg(target_pointer_width = "64")]
+    int_float_impl_body, isize, f64, ()
+);
+apply_size_gated_impl_body!(
+    #[cfg(target_pointer_width = "64")]
+    int_float_impl_body, usize, f32, ()
+);
+apply_size_gated_impl_body!(
+    #[cfg(target_pointer_width = "64")]
+    int_float_impl_body, usize, f64, ()
+);
 
 apply_impl_body!(int_uint_impl_body, i8, u128, ());
 apply_impl_body!(int_uint_impl_body, i16, u128, ());
 apply_impl_body!(int_uint_impl_body, i32, u128, ());
 apply_impl_body!(int_uint_impl_body, i64, u128, ());
 apply_impl_body!(int_uint_impl_body, i128, u128, ());
+apply_impl_body!(
+    #[cfg(any(
+        target_pointer_width = "16",
+        target_pointer_width = "32",
+        target_pointer_width = "64"
+    ))]
+    int_uint_impl_body, isize, u128, ()
+);
+
+macro_rules! define_check_concrete {
+    ($($tpw:literal => $uxx:tt, $ixx:tt;)*) => {
+        $(
+            #[cfg(target_pointer_width = $tpw)]
+            macro_rules! check_concrete_usize {
+                ($uxx => $body:item) => { $body };
+                ($t:tt => $body:item) => {};
+            }
+            #[cfg(target_pointer_width = $tpw)]
+            macro_rules! check_concrete_isize {
+                ($ixx => $body:item) => { $body };
+                ($t:tt => $body:item) => {};
+            }
+        )*
+    };
+}
+
+define_check_concrete! {
+    "16" => u16, i16;
+    "32" => u32, i32;
+    "64" => u64, i64;
+}
 
 macro_rules! impl_common_type {
-    ($($T:ty, $U:ty => $C:ty;)*) => {$(
+    ($($T:tt, $U:tt => $C:ty;)*) => {$(
         apply_impl_body!(common_type_impl_body, $T, $U, $C);
+        check_concrete_usize!($T => apply_size_gated_impl_body!(common_type_impl_body, usize, $U, $C););
+        check_concrete_isize!($T => apply_size_gated_impl_body!(common_type_impl_body, isize, $U, $C););
+        check_concrete_usize!($U => apply_size_gated_impl_body!(common_type_impl_body, $T, usize, $C););
+        check_concrete_isize!($U => apply_size_gated_impl_body!(common_type_impl_body, $T, isize, $C););
+        check_concrete_usize!($T => check_concrete_isize!($U => apply_size_gated_impl_body!(common_type_impl_body, usize, isize, $C);););
     )*}
 }
 
@@ -242,6 +312,19 @@ impl_common_type! {
      i64, i128 => i128;
      f32,  f64 =>  f64;
 }
+
+#[cfg(target_pointer_width = "16")]
+apply_size_gated_impl_body!(common_type_impl_body, usize, u16, u16);
+#[cfg(target_pointer_width = "16")]
+apply_size_gated_impl_body!(common_type_impl_body, isize, i16, i16);
+#[cfg(target_pointer_width = "32")]
+apply_size_gated_impl_body!(common_type_impl_body, usize, u32, u32);
+#[cfg(target_pointer_width = "32")]
+apply_size_gated_impl_body!(common_type_impl_body, isize, i32, i32);
+#[cfg(target_pointer_width = "64")]
+apply_size_gated_impl_body!(common_type_impl_body, usize, u64, u64);
+#[cfg(target_pointer_width = "64")]
+apply_size_gated_impl_body!(common_type_impl_body, isize, i64, i64);
 
 #[cfg(test)]
 mod tests {
@@ -337,15 +420,15 @@ mod tests {
     #[test]
     fn test_everything() {
         macro_rules! compare_all_combinations {
-            ($($type:ty, $type_data:ident;)*) => {
+            ($($(#$cfg:tt)? $type:ty, $type_data:ident;)*) => {
                 macro_rules! compare_all_against {
                     ($given_type:ty, $given_type_data:ident) => {
                         // Compare all types against $given_type
-                        $( compare::<$type, $given_type>(&$type_data, &$given_type_data); )*
+                        $( $(#$cfg)? compare::<$type, $given_type>(&$type_data, &$given_type_data); )*
                     };
                 }
                 // For each type, compare all other types against it
-                $( compare_all_against!($type, $type_data); )*
+                $( $(#$cfg)? compare_all_against!($type, $type_data); )*
             };
         }
 
@@ -354,11 +437,23 @@ mod tests {
         let u32_data = make_unsigned(32, |x| to_integer(x).and_then(|i| i.to_u32()));
         let u64_data = make_unsigned(64, |x| to_integer(x).and_then(|i| i.to_u64()));
         let u128_data = make_unsigned(128, |x| to_integer(x).and_then(|i| i.to_u128()));
+        #[cfg(any(
+            target_pointer_width = "16",
+            target_pointer_width = "32",
+            target_pointer_width = "64"
+        ))]
+        let usize_data = make_unsigned(usize::BITS, |x| to_integer(x).and_then(|i| i.to_usize()));
         let i8_data = make_signed(8, |x| to_integer(x).and_then(|i| i.to_i8()));
         let i16_data = make_signed(16, |x| to_integer(x).and_then(|i| i.to_i16()));
         let i32_data = make_signed(32, |x| to_integer(x).and_then(|i| i.to_i32()));
         let i64_data = make_signed(64, |x| to_integer(x).and_then(|i| i.to_i64()));
         let i128_data = make_signed(128, |x| to_integer(x).and_then(|i| i.to_i128()));
+        #[cfg(any(
+            target_pointer_width = "16",
+            target_pointer_width = "32",
+            target_pointer_width = "64"
+        ))]
+        let isize_data = make_signed(isize::BITS, |x| to_integer(x).and_then(|i| i.to_isize()));
         let f32_data = NumType {
             interesting_values: interesting_values(&[
                 &-two_pow(24),  // int min
@@ -387,11 +482,23 @@ mod tests {
             u32, u32_data;
             u64, u64_data;
             u128, u128_data;
+            #[cfg(any(
+                target_pointer_width = "16",
+                target_pointer_width = "32",
+                target_pointer_width = "64"
+            ))]
+            usize, usize_data;
             i8, i8_data;
             i16, i16_data;
             i32, i32_data;
             i64, i64_data;
             i128, i128_data;
+            #[cfg(any(
+                target_pointer_width = "16",
+                target_pointer_width = "32",
+                target_pointer_width = "64"
+            ))]
+            isize, isize_data;
             f32, f32_data;
             f64, f64_data;
         );
